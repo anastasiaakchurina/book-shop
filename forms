@@ -1,0 +1,25 @@
+from flask_wtf import FlaskForm
+from wtforms import StringField, SubmitField, TextAreaField, PasswordField, BooleanField, DecimalField, SelectField
+from wtforms.validators import DataRequired, URL
+from models import User
+
+class ProductCreateForm(FlaskForm):
+    title = StringField('Название', validators=[DataRequired()])
+    description = TextAreaField('Описание', validators=[DataRequired()])
+    image = StringField('Картинка', validators=[DataRequired(),URL()])
+    price = DecimalField('Цена', validators=[DataRequired()])
+    submit = SubmitField('Добавить')
+
+
+class LoginForm(FlaskForm):
+    username = StringField('Логин', validators=[DataRequired()])
+    password = PasswordField('Пароль', validators=[DataRequired()])
+    remember_me = BooleanField('Запомнить меня')
+    submit = SubmitField('Войти')
+
+
+class UserCreateForm(FlaskForm):
+    username = StringField('Логин', validators=[DataRequired()])
+    password = PasswordField('Пароль', validators=[DataRequired()])
+    type = SelectField('Тип', choices=User.get_type_titles(True), coerce=int)
+    submit = SubmitField('Создать')
