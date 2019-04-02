@@ -1,0 +1,273 @@
+from flask_restful import abort
+
+from flask import Flask, redirect, session, request
+from flask import render_template as flask_render_template
+import extra.auth as auth
+import extra.cart as cart
+from api.v1 import init as init_api_v1
+from forms import *
+import datetime
+
+from models import User, Product, Order, Item
+
+def init_route(app, db):
+    # Переопределение стандартного рендера, добавляет параметр auth_user
+    def render_template(*args, **kwargs):
+        auth_user = auth.get_user()
+        kwargs['auth_user'] = auth_user
+        menu = []
+        if auth.is_authorized():
+            menu.append(['Заказы', '/orders'])
+            if auth_user.type == User.TYPE_ADMIN or auth_user.type == User.TYPE_SELLER:
+                menu.append(['Продукты', '/products'])
+            if auth_user.type == User.TYPE_ADMIN:
+                menu.append(['Пользователи', '/users'])
+        if not cart.is_empty():
+            menu.append(['Корзина (' + str(cart.count()) + ')', '/cart'])
+
+        kwargs['menu'] = menu
+        return flask_render_template(*args, **kwargs)
+
+    init_api_v1(app, auth)  # Инициализация маршрутов для API
+
+    @app.route('/')
+    @app.route('/index')
+    def index():
+        product_list = Product.query.filter_by(active=True)
+        return render_template(
+            'index.html',
+            title="Главная",
+            product_list=product_list
+        )
+
+    @app.route('/install')
+    def install():
+        db.drop_all()
+        db.create_all()
+        user = User.add('admin', 'root', User.TYPE_ADMIN)
+        for i in range(10):
+            Product.add('Book ' + str(i + 1),
+                        "Text Text Text Text Text Text Text\nText Text Text Text Text Text Text\nText Text Text Text Text Text Text",
+                        (i + 1) * 10, True, 'https://www.smashwords.com/static/img/book.png', user)
+        return render_template(
+            'install-success.html',
+            title="Главная"
+        )
+
+    @app.route('/login', methods=['GET', 'POST'])
+    def login():
+        has_error = False
+        login = ''
+        if request.method == 'POST':
+            username = request.form['username']
+            if auth.login(username, request.form['password']):
+                return redirect('/')
+            else:
+                has_error = True
+        return render_template(
+            'login.html',
+            title='Вход',
+            login=login,
+            has_error=has_error
+        )
+
+    @app.route('/logout', methods=['GET'])
+    def logout():
+        auth.logout()
+        return redirect('/')
+
+    @app.route('/user/create', methods=['GET', 'POST'])
+    def registration():
+        has_error = False
+        form = UserCreateForm()
+        if form.is_submitted():
+            username = form.username.data
+            password = form.password.data
+            if auth.is_authorized() and auth.get_user().type == User.TYPE_ADMIN:
+                type = form.type.data
+            else:
+                type = User.TYPE_CUSTOMER
+
+            user = User.query.filter_by(username=username).first()
+            if user:
+                has_error = True
+            else:
+                User.add(username=username, password=password, type=type)
+                if auth.is_authorized() and auth.get_user().type == User.TYPE_ADMIN:
+                    return redirect('/users')
+                auth.login(username, password)
+                return redirect('/')
+        return render_template(
+            'registration.html',
+            title='Зарегистрироваться',
+            form=form,
+            has_error=has_error
+        )
+
+    @app.route('/users', methods=['GET'])
+    def user_list():
+        if not auth.is_authorized() or auth.get_user().type != User.TYPE_ADMIN:
+            return redirect('/login')
+        user_list = User.query.filter_by()
+        return render_template(
+            'user-list.html',
+            title="Пользователи",
+            user_list=user_list
+        )
+
+    @app.route('/products', methods=['GET'])
+    def product_list():
+        auth_user = auth.get_user()
+        if not auth.is_authorized():
+            return redirect('/login')
+        if auth_user.type != User.TYPE_SELLER and auth_user.type != User.TYPE_ADMIN:
+            abort(403)
+        if auth_user.type == User.TYPE_SELLER:
+            product_list = Product.query.filter_by(user_id=auth.get_user().id)
+        else:
+            product_list = Product.query.filter_by()
+        return render_template(
+            'product-list.html',
+            title="Продукты",
+            product_list=product_list
+        )
+
+    @app.route('/product/create', methods=['GET', 'POST'])
+    def product_create_form():
+        if not auth.is_authorized():
+            return redirect('/login')
+        auth_user = auth.get_user()
+        form = ProductCreateForm()
+        if form.validate_on_submit():
+            title = form.title.data
+            description = form.description.data
+            image = form.image.data
+            price = form.price.data
+            Product.add(title=title, description=description, price=price, active=(auth_user.type == User.TYPE_ADMIN),
+                        image=image, user=auth_user)
+            return redirect('/')
+        return render_template(
+            'product-create.html',
+            title='Создать продукт',
+            form=form
+        )
+
+    @app.route('/product/<int:id>')
+    def product_view(id: int):
+        product = Product.query.filter_by(id=id).first()
+        if not product:
+            abort(404)
+        return render_template(
+            'product-view.html',
+            title='Продукт - ' + product.title,
+            product=product
+        )
+
+    @app.route('/product/delete/<int:id>')
+    def product_delete(id: int):
+        auth_user = auth.get_user()
+        if not auth.is_authorized():
+            return redirect('/login')
+        product = Product.query.filter_by(id=id).first()
+        if product.user_id != auth_user.id and auth_user.type != User.TYPE_ADMIN:
+            abort(403)
+        Product.delete(product)
+        return redirect('/products')
+
+    @app.route('/product/toggle/<int:id>')
+    def product_toggle(id: int):
+        auth_user = auth.get_user()
+        if not auth.is_authorized():
+            return redirect('/login')
+        product = Product.query.filter_by(id=id).first()
+        if product.user_id != auth_user.id and auth_user.type != User.TYPE_ADMIN:
+            abort(403)
+        product.active = not product.active
+        db.session.commit()
+        return redirect('/products')
+
+    @app.route('/cart/add/<int:id>')
+    def cart_add(id: int):
+        cart.add(id);
+        return redirect('/cart')
+
+    @app.route('/cart/clear')
+    def cart_clear():
+        cart.clear();
+        return redirect('/index')
+
+    @app.route('/cart')
+    def cart_view():
+        if cart.is_empty():
+            return redirect('/index')
+        products = []
+        total = 0
+        for i in cart.get():
+            product = Product.query.filter_by(id=i[0]).first()
+            if product:
+                products.append(
+                    {
+                        'id': product.id,
+                        'title': product.title,
+                        'amount': i[1],
+                        'price': product.price,
+                        'total': i[1] * product.price
+                    }
+                )
+                total = total + i[1] * product.price
+        return render_template(
+            'cart-view.html',
+            title='Корзина',
+            products=products,
+            total=total
+        )
+
+    @app.route('/order/create')
+    def order_create():
+        auth_user = auth.get_user()
+        if not auth.is_authorized():
+            return redirect('/login')
+        if cart.is_empty():
+            return redirect('/index')
+        total = 0
+        order = Order.add(0, datetime.datetime.now(), auth_user)
+        for i in cart.get():
+            product = Product.query.filter_by(id=i[0]).first()
+            if product:
+                Item.add(order, i[1], product)
+                total = total + i[1] * product.price
+        order.total = total
+        db.session.commit()
+        cart.clear()
+
+        return redirect('/order/' + str(order.id))
+    
+    
+    @app.route('/orders', methods=['GET'])
+    def order_list():
+        auth_user = auth.get_user()
+        if not auth.is_authorized():
+            return redirect('/login')
+        if auth_user.type == User.TYPE_ADMIN:
+            order_list = Order.query.filter_by()
+        else:
+            order_list = Order.query.filter_by(user_id=auth_user.id)
+        return render_template(
+            'order-list.html',
+            title="Заказы",
+            order_list=order_list
+        )
+
+    @app.route('/order/<int:id>')
+    def order_view(id: int):
+        auth_user = auth.get_user()
+        order = Order.query.filter_by(id=id).first()
+        if not order:
+            abort(404)
+        if order.user_id != auth_user.id and auth_user.type != User.TYPE_ADMIN:
+            abort(403)
+        return render_template(
+            'order-view.html',
+            title='Заказ - #' + str(order.id),
+            order=order
+        )
