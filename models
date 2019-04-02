@@ -1,0 +1,146 @@
+from dbase import db
+from _md5 import md5
+
+
+class User(db.Model):
+    TYPE_ADMIN = 1
+    TYPE_SELLER = 2
+    TYPE_CUSTOMER = 3
+
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    password = db.Column(db.String(80), unique=False, nullable=False)  # будем хранить хэш пароля
+    type = db.Column(db.Integer, unique=False, nullable=False)
+
+    def __repr__(self):
+        return '<User {} {}>'.format(self.id, self.username)
+
+    @staticmethod
+    def add(username, password, type):
+        password = md5(password.encode('utf-8')).hexdigest()
+        user = User(username=username, password=password, type=type)
+        db.session.add(user)
+        db.session.commit()
+        return user
+
+    @staticmethod
+    def delete(obj):
+        db.session.delete(obj)
+        db.session.commit()
+
+    @staticmethod
+    def get_type_titles(for_selector = False):
+        if for_selector:
+            return [(User.TYPE_ADMIN, 'Администратор'), (User.TYPE_SELLER, 'Продавец'), (User.TYPE_CUSTOMER, 'Покупатель')]
+
+        return {
+            User.TYPE_ADMIN: 'Администратор',
+            User.TYPE_SELLER: 'Продавец',
+            User.TYPE_CUSTOMER: 'Покупатель',
+        }
+
+    def get_type_title(self):
+        titles = User.get_type_titles()
+        return titles[self.type]
+
+class Product(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(80), unique=False, nullable=False)
+    description = db.Column(db.String(200), unique=False, nullable=True)  # пусть текст можно будет оставить пустым
+    price = db.Column(db.Float, unique=False, nullable=False)
+    active = db.Column(db.Boolean, unique=False, nullable=False)
+    image = db.Column(db.String(200), unique=False, nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user = db.relationship('User', backref=db.backref('product_list', lazy=True))
+
+    def __repr__(self):
+        return '<Product {} {} {}>'.format(self.id, self.title, self.user_id)
+
+    @staticmethod
+    def add(title, description, price, active, image, user):
+        product = Product(title=title, description=description, price=price, active=active, image=image, user=user)
+        db.session.add(product)
+        db.session.commit()
+        return product
+
+    @staticmethod
+    def delete(obj):
+        db.session.delete(obj)
+        db.session.commit()
+
+    @property
+    def serialize(self):
+        """Return object data in easily serializable format"""
+        return {
+            'id': self.id,
+            'title': self.title,
+            'description': self.description,
+            'image': self.image,
+            'price': self.price,
+            'user_id': self.user_id
+        }
+
+class Order(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    created = db.Column(db.Date, unique=False, nullable=False)
+    total = db.Column(db.Float, unique=False, nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    user = db.relationship('User', backref=db.backref('order_list', lazy=True))
+
+    def __repr__(self):
+        return '<Order {} {} {}>'.format(self.id, self.created, self.user_id)
+
+    @staticmethod
+    def add(total, created, user):
+        order = Order(total=total, created=created, user=user)
+        db.session.add(order)
+        db.session.commit()
+        return order
+
+    @staticmethod
+    def delete(obj):
+        db.session.delete(obj)
+        db.session.commit()
+
+    @property
+    def serialize(self):
+        """Return object data in easily serializable format"""
+        return {
+            'id': self.id,
+            'created': self.created,
+            'total': self.total,
+            'user_id': self.user_id
+        }
+
+class Item(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    amount = db.Column(db.Integer, unique=False, nullable=False)
+    order_id = db.Column(db.Integer, db.ForeignKey('order.id'), nullable=False)
+    order = db.relationship('Order', backref=db.backref('item_list', lazy=True))
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=True)
+    product = db.relationship('Product', backref=db.backref('item_list', lazy=True))
+
+    def __repr__(self):
+        return '<Item {} {} {}>'.format(self.id, self.title, self.order_id)
+
+    @staticmethod
+    def add(order, amount, product):
+        item = Item(order=order, amount=amount, product=product)
+        db.session.add(item)
+        db.session.commit()
+        return item
+
+    @staticmethod
+    def delete(obj):
+        db.session.delete(obj)
+        db.session.commit()
+
+    @property
+    def serialize(self):
+        """Return object data in easily serializable format"""
+        return {
+            'id': self.id,
+            'amount': self.amount,
+            'order_id': self.order_id,
+            'product_id': self.product_id
+        }
